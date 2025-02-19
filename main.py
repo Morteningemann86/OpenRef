@@ -9,19 +9,42 @@ from download import download_video_audio, delete_download, MAX_FILE_SIZE, FILE_
 from audio_recorder_streamlit import audio_recorder
 from diarization import transcribe_audio_with_speakers
 from audio_processing import process_large_audio
-
-
 from prompt_templates import PROMPT_TEMPLATES
 
+
+import concurrent.futures  # Import the concurrent futures module
+import threading          # Import threading module
+from streamlit.runtime.scriptrunner import get_script_run_ctx, add_script_run_ctx
+
+# Save the original submit method of ThreadPoolExecutor.
+_original_submit = concurrent.futures.ThreadPoolExecutor.submit
+
+def _patched_submit(self, fn, *args, **kwargs):
+    # Get the current ScriptRunContext from the main thread.
+    ctx = get_script_run_ctx()
+    
+    # Define a wrapper function that attaches the ScriptRunContext to the worker thread.
+    def wrapped_fn(*args, **kwargs):
+        add_script_run_ctx(threading.current_thread(), ctx)
+        return fn(*args, **kwargs)
+    
+    # Call the original submit with the wrapped function.
+    return _original_submit(self, wrapped_fn, *args, **kwargs)
+
+# Replace the original submit method with our patched version.
+concurrent.futures.ThreadPoolExecutor.submit = _patched_submit
+
+
+# Load environment variables
 load_dotenv()
 
+# Retrieve API keys from environment variables
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", None)
 HUGGINGFACE_TOKEN = os.environ.get("HF_TOKEN", None)
 
 audio_file_path = None
 
-
-
+# Initialize session state for API key and Groq client if not already set.
 if 'api_key' not in st.session_state:
     st.session_state.api_key = GROQ_API_KEY
 
@@ -29,11 +52,15 @@ if 'groq' not in st.session_state:
     if GROQ_API_KEY:
         st.session_state.groq = Groq()
 
+# Configure the Streamlit page.
 st.set_page_config(
     page_title="OpenRef",
     page_icon="👐",
 )
 
+# ------------------------------------------------------------------------------
+# Function to check Groq API connection.
+# ------------------------------------------------------------------------------
 def check_groq_api():
     try:
         # Quick test call to Groq API
@@ -53,41 +80,33 @@ if 'groq' in st.session_state:
     else:
         st.success("✅ Groq API is connected and ready")
 
-      
+# ------------------------------------------------------------------------------
+# GenerationStatistics class: Tracks timing and token usage statistics.
+# ------------------------------------------------------------------------------
 class GenerationStatistics:
-    def __init__(self, input_time=0,output_time=0,input_tokens=0,output_tokens=0,total_time=0,model_name="llama3-8b-8192"):
+    def __init__(self, input_time=0, output_time=0, input_tokens=0, output_tokens=0, total_time=0, model_name="llama3-8b-8192"):
         self.input_time = input_time
         self.output_time = output_time
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
-        self.total_time = total_time # Sum of queue, prompt (input), and completion (output) times
+        self.total_time = total_time  # Sum of queue, prompt (input), and completion (output) times
         self.model_name = model_name
 
     def get_input_speed(self):
-        """ 
-        Tokens per second calculation for input
-        """
         if self.input_time != 0:
             return self.input_tokens / self.input_time
         else:
             return 0
-    
+
     def get_output_speed(self):
-        """ 
-        Tokens per second calculation for output
-        """
         if self.output_time != 0:
             return self.output_tokens / self.output_time
         else:
             return 0
-    
+
     def add(self, other):
-        """
-        Add statistics from another GenerationStatistics object to this one.
-        """
         if not isinstance(other, GenerationStatistics):
             raise TypeError("Can only add GenerationStatistics objects")
-        
         self.input_time += other.input_time
         self.output_time += other.output_time
         self.input_tokens += other.input_tokens
@@ -96,8 +115,7 @@ class GenerationStatistics:
 
     def __str__(self):
         total_tokens = self.input_tokens + self.output_tokens
-        cost = total_tokens * 0.000011  # $0.000011 per token
-        
+        cost = total_tokens * 0.000011  # Cost per token
         return (f"\n## {self.get_output_speed():.2f} T/s ⚡\nRound trip time: {self.total_time:.2f}s  Model: {self.model_name}\n"
                 f"Total cost: ${cost:.6f}\n\n"
                 f"| Metric          | Input          | Output          | Total          |\n"
@@ -107,6 +125,9 @@ class GenerationStatistics:
                 f"| Cost ($)        | {self.input_tokens * 0.000011:.6f}            | {self.output_tokens * 0.000011:.6f}            | {cost:.6f}            |\n"
                 f"| Inference Time (s) | {self.input_time:.2f}            | {self.output_time:.2f}            | {self.total_time:.2f}            |")
 
+# ------------------------------------------------------------------------------
+# NoteSection class: Manages note sections and updates content dynamically.
+# ------------------------------------------------------------------------------
 class NoteSection:
     def __init__(self, structure, transcript):
         self.structure = structure
@@ -139,7 +160,7 @@ class NoteSection:
     def return_existing_contents(self, level=1) -> str:
         existing_content = ""
         for title, content in self.structure.items():
-            if self.contents[title].strip():  # Only include title if there is content
+            if self.contents[title].strip():
                 existing_content += f"{'#' * level} {title}\n{self.contents[title]}.\n\n"
             if isinstance(content, dict):
                 existing_content += self.get_markdown_content(content, level + 1)
@@ -148,9 +169,8 @@ class NoteSection:
     def display_structure(self, structure=None, level=1):
         if structure is None:
             structure = self.structure
-        
         for title, content in structure.items():
-            if self.contents[title].strip():  # Only display title if there is content
+            if self.contents[title].strip():
                 st.markdown(f"{'#' * level} {title}")
                 self.placeholders[title].markdown(self.contents[title])
             if isinstance(content, dict):
@@ -166,38 +186,34 @@ class NoteSection:
         return col_index
 
     def get_markdown_content(self, structure=None, level=1):
-        """
-        Returns the markdown styled pure string with the contents.
-        """
         if structure is None:
             structure = self.structure
-        
         markdown_content = ""
         for title, content in structure.items():
-            if self.contents[title].strip():  # Only include title if there is content
+            if self.contents[title].strip():
                 markdown_content += f"{'#' * level} {title}\n{self.contents[title]}.\n\n"
             if isinstance(content, dict):
                 markdown_content += self.get_markdown_content(content, level + 1)
         return markdown_content
 
+# ------------------------------------------------------------------------------
+# Utility functions to create downloadable Markdown and PDF files.
+# ------------------------------------------------------------------------------
 def create_markdown_file(content: str) -> BytesIO:
-    """
-    Create a Markdown file from the provided content.
-    """
     markdown_file = BytesIO()
     markdown_file.write(content.encode('utf-8'))
     markdown_file.seek(0)
     return markdown_file
 
 def create_pdf_file(content: str):
-    """
-    Create a PDF file from the provided content.
-    """
     pdf_buffer = BytesIO()
     md2pdf(pdf_buffer, md_content=content)
     pdf_buffer.seek(0)
     return pdf_buffer
 
+# ------------------------------------------------------------------------------
+# Function to transcribe audio using Groq's Whisper model.
+# ------------------------------------------------------------------------------
 def transcribe_audio(audio_file, use_diarization=False):
     try:
         if use_diarization:
@@ -205,12 +221,10 @@ def transcribe_audio(audio_file, use_diarization=False):
             prompt = "This audio contains multiple speakers"
         else:
             prompt = ""
-        
-        # Define a transcription function that sets a valid filename for each chunk
+        # Define the transcription function for each audio chunk.
         def transcription_function(chunk, _):
-            # Ensure the chunk has a valid name attribute
             if not hasattr(chunk, "name") or not chunk.name:
-                chunk.name = "audio_chunk.wav"  # Adjust the extension if needed
+                chunk.name = "audio_chunk.wav"  # Ensure valid filename
             return st.session_state.groq.audio.transcriptions.create(
                 file=chunk,
                 model="whisper-large-v3",
@@ -225,9 +239,8 @@ def transcribe_audio(audio_file, use_diarization=False):
             transcription_function=transcription_function,
             use_diarization=use_diarization
         )
-        
         return full_transcription
-        
+
     except Exception as e:
         error_text = str(e)
         if "520" in error_text or "502" in error_text:
@@ -238,6 +251,9 @@ def transcribe_audio(audio_file, use_diarization=False):
             st.error("Error during transcription. Please try again or use a shorter audio clip.")
         return None
 
+# ------------------------------------------------------------------------------
+# Function to generate the notes structure using a Llama model.
+# ------------------------------------------------------------------------------
 def generate_notes_structure(transcript: str, model: str = "llama3-70b-8192"):
     template = PROMPT_TEMPLATES[selected_template]
     completion = st.session_state.groq.chat.completions.create(
@@ -252,19 +268,27 @@ def generate_notes_structure(transcript: str, model: str = "llama3-70b-8192"):
                 "content": f"### Transcript {transcript}\n\n### Example\n\n{template['shot_example']}### Instructions\n\nCreate a structure for comprehensive notes on the above transcribed audio. Use only text content, no placeholders."
             }
         ],
-        temperature=0.2,  # Lower temperature for more consistent JSON
+        temperature=0.2,
         max_tokens=8000,
         top_p=1,
         stream=False,
         response_format={"type": "json_object"},
         stop=None,
     )
-
     usage = completion.usage
-    statistics_to_return = GenerationStatistics(input_time=usage.prompt_time, output_time=usage.completion_time, input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens, total_time=usage.total_time, model_name=model)
-
+    statistics_to_return = GenerationStatistics(
+        input_time=usage.prompt_time,
+        output_time=usage.completion_time,
+        input_tokens=usage.prompt_tokens,
+        output_tokens=usage.completion_tokens,
+        total_time=usage.total_time,
+        model_name=model
+    )
     return statistics_to_return, completion.choices[0].message.content
 
+# ------------------------------------------------------------------------------
+# Function to generate content for a specific note section.
+# ------------------------------------------------------------------------------
 def generate_section(transcript: str, existing_notes: str, section: str, model: str = "llama3-8b-8192"):
     stream = st.session_state.groq.chat.completions.create(
         model=model,
@@ -284,7 +308,6 @@ def generate_section(transcript: str, existing_notes: str, section: str, model: 
         stream=True,
         stop=None,
     )
-
     for chunk in stream:
         tokens = chunk.choices[0].delta.content
         if tokens:
@@ -293,10 +316,19 @@ def generate_section(transcript: str, existing_notes: str, section: str, model: 
             if not x_groq.usage:
                 continue
             usage = x_groq.usage
-            statistics_to_return = GenerationStatistics(input_time=usage.prompt_time, output_time=usage.completion_time, input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens, total_time=usage.total_time, model_name=model)
+            statistics_to_return = GenerationStatistics(
+                input_time=usage.prompt_time,
+                output_time=usage.completion_time,
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
+                total_time=usage.total_time,
+                model_name=model
+            )
             yield statistics_to_return
 
-# Initialize
+# ------------------------------------------------------------------------------
+# Main Streamlit Application Logic
+# ------------------------------------------------------------------------------
 if 'button_disabled' not in st.session_state:
     st.session_state.button_disabled = False
 
@@ -319,55 +351,31 @@ def enable():
 def empty_st():
     st.empty()
 
-#################################
-# SIDEBAR CUSTOMIZATION SECTION #
-#################################
+# ------------------------------------------------------------------------------
+# SIDEBAR CUSTOMIZATION SECTION
+# ------------------------------------------------------------------------------
 try:
     with st.sidebar:
-        audio_files = {
-            "Transformers Explained by Google Cloud Tech": {
-                "file_path": "assets/audio/transformers_explained.m4a",
-                "youtube_link": "https://www.youtube.com/watch?v=SZorAJ4I-sA"
-            },
-            "The Essence of Calculus by 3Blue1Brown": {
-                "file_path": "assets/audio/essence_calculus.m4a",
-                "youtube_link": "https://www.youtube.com/watch?v=WUvTyaaNkzM"
-            },
-            "First 20 minutes of Groq's AMA": {
-                "file_path": "assets/audio/groq_ama_trimmed_20min.m4a",
-                "youtube_link": "https://www.youtube.com/watch?v=UztfweS-7MU"
-            }
-        }
-
         st.write(f"# 👐 OpenRef \n## Generate notes from audio in seconds using Groq, Whisper, and Llama3")
-        st.markdown(f"[Github Repository](https://github.com/bklieger/scribewizard)\n\nAs with all generative AI, content may include inaccurate or placeholder information. OpenRef is an MVP and all feedback is welcome! It is build on top of [ScribeWizard](https://github.com/bklieger/scribewizard)")
-
+        st.markdown(f"[Github Repository](https://github.com/Morteningemann86/OpenRef)\n\nAs with all generative AI, content may include inaccurate or placeholder information. OpenRef is an MVP and all feedback is welcome! It is built on top of [ScribeWizard](https://github.com/bklieger/scribewizard)")
         st.write(f"---")
-
         st.write("# Summary Templates")
         selected_template = st.selectbox(
             "Choose note-taking style:",
             options=list(PROMPT_TEMPLATES.keys())
         )
-        
         st.write(f"---")
-
         st.write("# Customization Settings\n🧪 These settings are experimental.\n")
         st.write(f"By default, OpenRef uses Llama3-70b for generating the notes outline and Llama3-8b for the content. This balances quality with speed and rate limit usage. You can customize these selections below.")
         outline_model_options = ["llama3-70b-8192", "llama3-8b-8192", "mixtral-8x7b-32768", "gemma-7b-it"]
         outline_selected_model = st.selectbox("Outline generation:", outline_model_options)
         content_model_options = ["llama3-8b-8192", "llama3-70b-8192", "mixtral-8x7b-32768", "gemma-7b-it", "gemma2-9b-it"]
         content_selected_model = st.selectbox("Content generation:", content_model_options)
-
-        
-        # Add note about rate limits
         st.info("Important: Different models have different token and rate limits which may cause runtime errors.")
-    
 
     if st.button('End Generation and Download Notes'):
         if "notes" in st.session_state:
-
-            # Create markdown file
+            # Create and offer download for Markdown file
             markdown_file = create_markdown_file(st.session_state.notes.get_markdown_content())
             st.download_button(
                 label='Download Text',
@@ -375,8 +383,7 @@ try:
                 file_name='generated_notes.txt',
                 mime='text/plain'
             )
-
-            # Create pdf file (styled)
+            # Create and offer download for PDF file
             pdf_file = create_pdf_file(st.session_state.notes.get_markdown_content())
             st.download_button(
                 label='Download PDF',
@@ -392,6 +399,9 @@ try:
     youtube_link = None
     groq_input_key = None
 
+    # ------------------------------------------------------------------------------
+    # Input Method Selection: Upload or Record Audio
+    # ------------------------------------------------------------------------------
     input_method = st.radio(
         "Choose input method:",
         ["Upload audio file", "Record audio"]
@@ -403,7 +413,6 @@ try:
             audio_bytes = audio_file.read()
             st.audio(audio_bytes)
             audio_file.seek(0)
-            
     elif input_method == "Record audio":
         st.write("Click below to record audio")
         audio_bytes = audio_recorder(
@@ -414,38 +423,34 @@ try:
             audio_file = BytesIO(audio_bytes)
             audio_file.name = "recording.wav"
 
+    # Toggle to enable/disable speaker diarization
     use_diarization = st.toggle('Enable Speaker Diarization', value=False)
 
     with st.form("groqform"):
         if not GROQ_API_KEY:
             groq_input_key = st.text_input("Enter your Groq API Key (gsk_yA...):", "", type="password")
-        
-
-        # Generate button
         submitted = st.form_submit_button(st.session_state.button_text, on_click=disable, disabled=st.session_state.button_disabled)
 
-        #processing status
+        # Status display elements
         status_text = st.empty()
         def display_status(text):
             status_text.write(text)
-
         def clear_status():
             status_text.empty()
 
         download_status_text = st.empty()
-        def display_download_status(text:str):
-            download_status_text.write(text)    
-
+        def display_download_status(text: str):
+            download_status_text.write(text)
         def clear_download_status():
             download_status_text.empty()
-        
-        # Statistics
+
+        # Placeholder for statistics display
         placeholder = st.empty()
         def display_statistics():
             with placeholder.container():
                 if st.session_state.statistics_text:
                     if "Transcribing audio in background" not in st.session_state.statistics_text:
-                        st.markdown(st.session_state.statistics_text + "\n\n---\n")  # Format with line if showing statistics
+                        st.markdown(st.session_state.statistics_text + "\n\n---\n")
                     else:
                         st.markdown(st.session_state.statistics_text)
                 else:
@@ -464,73 +469,63 @@ try:
                 st.error("Please record some audio first")
             else:
                 st.session_state.button_disabled = True
-            
-            audio_file_path = None
 
+            audio_file_path = None
 
             if not GROQ_API_KEY:
                 st.session_state.groq = Groq(api_key=groq_input_key)
 
             display_status("Transcribing audio in background....")
-            transcription_text = transcribe_audio(audio_file)
+            transcription_text = transcribe_audio(audio_file, use_diarization=use_diarization)
 
             display_statistics()
-            
 
             display_status("Generating notes structure....")
             large_model_generation_statistics, notes_structure = generate_notes_structure(transcription_text, model=str(outline_selected_model))
-            print("Structure: ",notes_structure)
+            # print("Structure: ", notes_structure)
 
             display_status("Generating notes ...")
             total_generation_statistics = GenerationStatistics(model_name=str(content_selected_model))
             clear_status()
 
-
             try:
                 notes_structure_json = json.loads(notes_structure)
-                notes = NoteSection(structure=notes_structure_json,transcript=transcription_text)
-                
+                notes = NoteSection(structure=notes_structure_json, transcript=transcription_text)
                 if 'notes' not in st.session_state:
                     st.session_state.notes = notes
-
                 st.session_state.notes.display_structure()
 
+                # Recursive function to stream content for each note section.
                 def stream_section_content(sections):
                     for title, content in sections.items():
                         if isinstance(content, str):
-                            content_stream = generate_section(transcript=transcription_text, existing_notes=notes.return_existing_contents(), section=(title + ": " + content),model=str(content_selected_model))
+                            content_stream = generate_section(
+                                transcript=transcription_text,
+                                existing_notes=notes.return_existing_contents(),
+                                section=(title + ": " + content),
+                                model=str(content_selected_model)
+                            )
                             for chunk in content_stream:
-                                # Check if GenerationStatistics data is returned instead of str tokens
-                                chunk_data = chunk
-                                if type(chunk_data) == GenerationStatistics:
-                                    total_generation_statistics.add(chunk_data)
-                                    
+                                # Check if the chunk is GenerationStatistics data.
+                                if isinstance(chunk, GenerationStatistics):
+                                    total_generation_statistics.add(chunk)
                                     st.session_state.statistics_text = str(total_generation_statistics)
                                     display_statistics()
                                 elif chunk is not None:
                                     st.session_state.notes.update_content(title, chunk)
                         elif isinstance(content, dict):
                             stream_section_content(content)
-
                 stream_section_content(notes_structure_json)
             except json.JSONDecodeError:
                 st.error("Failed to decode the notes structure. Please try again.")
-
             enable()
-
 except Exception as e:
     st.session_state.button_disabled = False
-
     if hasattr(e, 'status_code') and e.status_code == 413:
-        # In the future, this limitation will be fixed as ScribeWizard will automatically split the audio file and transcribe each part.
         st.error(FILE_TOO_LARGE_MESSAGE)
     else:
         st.error(e)
-
     if st.button("Clear"):
         st.rerun()
-    
-    # Remove audio after exception to prevent data storage leak
     if audio_file_path is not None:
         delete_download(audio_file_path)
-

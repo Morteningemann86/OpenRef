@@ -3,3 +3,4 @@ venv
 .venv
 **.pyc
 downloads/
+temp_audio.wav
