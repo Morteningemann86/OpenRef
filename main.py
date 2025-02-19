@@ -7,6 +7,8 @@ from md2pdf.core import md2pdf
 from dotenv import load_dotenv
 from download import download_video_audio, delete_download, MAX_FILE_SIZE, FILE_TOO_LARGE_MESSAGE
 from audio_recorder_streamlit import audio_recorder
+from diarization import transcribe_audio_with_speakers
+from audio_processing import process_large_audio
 
 
 from prompt_templates import PROMPT_TEMPLATES
@@ -14,7 +16,10 @@ from prompt_templates import PROMPT_TEMPLATES
 load_dotenv()
 
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", None)
+HUGGINGFACE_TOKEN = os.environ.get("HF_TOKEN", None)
+
 audio_file_path = None
+
 
 
 if 'api_key' not in st.session_state:
@@ -28,6 +33,26 @@ st.set_page_config(
     page_title="OpenRef",
     page_icon="👐",
 )
+
+def check_groq_api():
+    try:
+        # Quick test call to Groq API
+        st.session_state.groq.chat.completions.create(
+            model="llama3-8b-8192",
+            messages=[{"role": "user", "content": "test"}],
+            max_tokens=1
+        )
+        return True
+    except Exception:
+        return False
+
+if 'groq' in st.session_state:
+    api_status = check_groq_api()
+    if not api_status:
+        st.error("⚠️ Groq API is currently unavailable. Please try again later.")
+    else:
+        st.success("✅ Groq API is connected and ready")
+
       
 class GenerationStatistics:
     def __init__(self, input_time=0,output_time=0,input_tokens=0,output_tokens=0,total_time=0,model_name="llama3-8b-8192"):
@@ -173,21 +198,42 @@ def create_pdf_file(content: str):
     pdf_buffer.seek(0)
     return pdf_buffer
 
-def transcribe_audio(audio_file):
+def transcribe_audio(audio_file, use_diarization=False):
     """
-    Transcribes audio using Groq's Whisper API.
+    Transcribes audio using Groq's Whisper API, with optional speaker diarization.
     """
-    transcription = st.session_state.groq.audio.transcriptions.create(
-      file=audio_file,
-      model="whisper-large-v3",
-      prompt="",
-      response_format="json",
-      language="en",
-      temperature=0.0 
-    )
-
-    results = transcription.text
-    return results
+    try:
+        if use_diarization:
+            transcript, segments = transcribe_audio_with_speakers(audio_file)
+            prompt = f"This audio contains multiple speakers"
+        else:
+            prompt = ""
+            
+        # Process large audio files in chunks
+        full_transcription = process_large_audio(
+            audio_file=audio_file,
+            transcription_function=lambda chunk, _: st.session_state.groq.audio.transcriptions.create(
+                file=chunk,
+                model="whisper-large-v3",
+                prompt=prompt,
+                response_format="json",
+                language="en",
+                temperature=0.0
+            ).text,
+            use_diarization=use_diarization
+        )
+        
+        return full_transcription
+        
+    except Exception as e:
+        error_text = str(e)
+        if "520" in error_text or "502" in error_text:
+            st.error("Groq API is currently experiencing high load. Please wait a few minutes and try again.")
+        elif "DOCTYPE html" in error_text:
+            st.error("Connection issue detected. Please check your internet connection and try again.")
+        else:
+            st.error("Error during transcription. Please try again or use a shorter audio clip.")
+        return None
 
 def generate_notes_structure(transcript: str, model: str = "llama3-70b-8192"):
     template = PROMPT_TEMPLATES[selected_template]
@@ -358,15 +404,14 @@ try:
     elif input_method == "Record audio":
         st.write("Click below to record audio")
         audio_bytes = audio_recorder(
-            pause_threshold=120.0,
-            recording_color="#e8576e",
-            neutral_color="#6aa36f"
+            pause_threshold=120.0
         )
         if audio_bytes:
             st.audio(audio_bytes)
             audio_file = BytesIO(audio_bytes)
             audio_file.name = "recording.wav"
 
+    use_diarization = st.toggle('Enable Speaker Diarization', value=False)
 
     with st.form("groqform"):
         if not GROQ_API_KEY:
@@ -485,3 +530,4 @@ except Exception as e:
     # Remove audio after exception to prevent data storage leak
     if audio_file_path is not None:
         delete_download(audio_file_path)
+

@@ -44,25 +44,27 @@ PROMPT_TEMPLATES = {
 '''
     },
     "Municipality Citizen Engagement Meeting": {
-        "system": "Write a JSON structure for a citizen engagement meeting summary. The response must be valid JSON that follows this structure: {\"Meeting Participants\":\"Overview of attendees and roles\", \"Community Topics\":\"Key issues raised by citizens\", \"Proposed Solutions\":\"Suggested resolutions and approaches\", \"Community Action Items\":\"Specific follow-up tasks and commitments\"}",
+        "system": "Write a JSON structure for a citizen engagement meeting summary with speaker attribution. The response must be valid JSON that follows this structure: {\"Meeting Participants\":\"Overview of number of speakers identified\", \"Community Topics\":\"Key issues raised by speakers\", \"Proposed Solutions\":\"Suggested resolutions with speaker attribution\", \"Community Action Items\":\"Specific follow-up tasks and commitments\"}",
         "shot_example": '''
 # 🏘️ Citizen Engagement Meeting Summary
 
 ## 👥 Participants  
-- **Municipal Representatives**: [Names/Roles]  
-- **Community Members**: [Number of attendees]  
+- Number of speakers identified in discussion
 
 ## 📢 Key Topics Discussed  
-- **Issue 1**: [Description]  
-- **Issue 2**: [Description]  
+- Key points raised by each speaker
+- Important discussion threads
+- Main concerns and suggestions
 
 ## 🔄 Proposed Solutions  
-- **Solution A**: [Details]  
-- **Solution B**: [Details]  
+- Solutions presented during discussion
+- Collaborative suggestions from multiple speakers
+- Areas of consensus
 
 ## 📝 Action Points  
-- **Follow-up on [Issue]** (Responsible: **[Person/Department]**, Deadline: **[Date]**)  
-- **Next Meeting Scheduled**: **[Date]**  
+- Follow-up tasks identified
+- Next steps agreed upon
+- Timeline for implementation
 '''
     }
 }
