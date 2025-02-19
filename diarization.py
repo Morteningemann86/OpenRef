@@ -1,56 +1,80 @@
 import streamlit as st
 from groq import Groq
 from pyannote.audio import Pipeline
-import torch
-import numpy as np
-import wave
-from pydub import AudioSegment
-import json
 import os
+from pydub import AudioSegment
 from io import BytesIO
+# Import APIQueue from your audio_processing module to manage rate limits
+from audio_processing import APIQueue
+
+# Note: The following variables are assumed to be defined elsewhere in your code:
+# - PROMPT_TEMPLATES: A dictionary of prompt templates.
+# - selected_template: The key for the selected prompt template.
+# - GenerationStatistics: A class that captures generation statistics.
+# Ensure these are imported or defined in your project.
 
 def transcribe_audio_with_speakers(audio_file):
     """
-    Transcribes audio using Groq's Whisper API with speaker diarization.
+    Transcribes audio using Groq's Whisper API with speaker diarization,
+    applying rate limiting using APIQueue.
+
+    Args:
+        audio_file (BytesIO or str): The audio file to transcribe. If a BytesIO object is
+                                     provided, it will be converted to a temporary WAV file.
+
+    Returns:
+        formatted_transcript (str): A transcript with speaker labels.
+        transcribed_segments (list): A list of dictionaries containing speaker, text,
+                                     start, and end times for each segment.
     """
-    # Initialize pyannote pipeline for speaker diarization
+    # Initialize the speaker diarization pipeline from Hugging Face.
+    # Replace 'YOUR_HUGGING_FACE_TOKEN' with your actual Hugging Face token.
     pipeline = Pipeline.from_pretrained(
         "pyannote/speaker-diarization",
-        use_auth_token="YOUR_HUGGING_FACE_TOKEN"  # You'll need to get this from Hugging Face
+        use_auth_token=os.environ.get("HF_TOKEN")
     )
 
-    # Convert audio to format compatible with pyannote
+    # If audio_file is a BytesIO stream, export it to a temporary WAV file.
     if isinstance(audio_file, BytesIO):
         audio = AudioSegment.from_file(audio_file)
         audio.export("temp_audio.wav", format="wav")
         audio_file_path = "temp_audio.wav"
     else:
+        # Otherwise, assume audio_file is a file path.
         audio_file_path = audio_file
 
-    # Perform speaker diarization
+    # Perform speaker diarization on the provided audio file.
     diarization = pipeline(audio_file_path)
     
-    # Create segments with speaker information
+    # Extract segments with speaker labels.
     segments = []
     for turn, _, speaker in diarization.itertracks(yield_label=True):
         segments.append({
-            "start": turn.start,
-            "end": turn.end,
-            "speaker": speaker
+            "start": turn.start,  # Start time in seconds
+            "end": turn.end,      # End time in seconds
+            "speaker": speaker    # Speaker label
         })
 
-    # Transcribe each segment
+    # Initialize the APIQueue to enforce rate limiting for API calls.
+    queue = APIQueue()
+
+    # List to hold transcriptions for each segment.
     transcribed_segments = []
     for segment in segments:
-        # Extract audio segment
+        # Calculate start and end times in milliseconds.
         start_ms = int(segment["start"] * 1000)
         end_ms = int(segment["end"] * 1000)
+        
+        # Extract the audio segment corresponding to the current speaker turn.
         audio_segment = AudioSegment.from_wav(audio_file_path)[start_ms:end_ms]
         
-        # Save segment temporarily
+        # Export the segment to a temporary WAV file.
         audio_segment.export("temp_segment.wav", format="wav")
         
-        # Transcribe segment
+        # Wait until the API is available (rate limiting).
+        queue.wait_if_needed()
+        
+        # Transcribe the audio segment using Groq's Whisper API.
         with open("temp_segment.wav", "rb") as segment_file:
             transcription = st.session_state.groq.audio.transcriptions.create(
                 file=segment_file,
@@ -61,6 +85,7 @@ def transcribe_audio_with_speakers(audio_file):
                 temperature=0.0
             )
         
+        # Store the transcription along with speaker and timing info.
         transcribed_segments.append({
             "speaker": segment["speaker"],
             "text": transcription.text,
@@ -68,13 +93,13 @@ def transcribe_audio_with_speakers(audio_file):
             "end": segment["end"]
         })
 
-    # Clean up temporary files
+    # Clean up temporary files if they exist.
     if os.path.exists("temp_audio.wav"):
         os.remove("temp_audio.wav")
     if os.path.exists("temp_segment.wav"):
         os.remove("temp_segment.wav")
 
-    # Format the final transcript with speaker labels
+    # Construct a formatted transcript that includes speaker labels.
     formatted_transcript = ""
     for segment in transcribed_segments:
         formatted_transcript += f"[{segment['speaker']}]: {segment['text']}\n"
@@ -83,33 +108,57 @@ def transcribe_audio_with_speakers(audio_file):
 
 def generate_notes_structure(transcript: str, segments: list, model: str = "llama3-70b-8192"):
     """
-    Modified to include speaker information in the structure generation
+    Generates a notes structure using Groq's Chat API that takes into account speaker information.
+
+    Args:
+        transcript (str): The full transcript of the audio.
+        segments (list): List of speaker-segment dictionaries.
+        model (str): The model name to use for generating the structure.
+
+    Returns:
+        statistics_to_return (GenerationStatistics): Statistics from the API call.
+        notes_structure (str): The generated notes structure in JSON format.
     """
+    # Ensure that PROMPT_TEMPLATES and selected_template are defined in your project.
     template = PROMPT_TEMPLATES[selected_template]
     
-    # Create a more detailed prompt that includes speaker information
-    speaker_context = "This transcript includes multiple speakers. Please consider the different perspectives and contributions from each speaker when creating the structure.\n\n"
+    # Build a context prompt that informs the model about multiple speakers.
+    speaker_context = (
+        "This transcript includes multiple speakers. Please consider the different "
+        "perspectives and contributions from each speaker when creating the structure.\n\n"
+    )
     
+    # Create the completion call using Groq's Chat API.
     completion = st.session_state.groq.chat.completions.create(
         model=model,
         messages=[
             {
                 "role": "system",
-                "content": template["system"] + " Always return valid JSON with string values only, no placeholders. Consider speaker roles and perspectives in the structure."
+                "content": (
+                    template["system"] +
+                    " Always return valid JSON with string values only, no placeholders. "
+                    "Consider speaker roles and perspectives in the structure."
+                )
             },
             {
                 "role": "user",
-                "content": f"{speaker_context}### Transcript\n{transcript}\n\n### Example\n\n{template['shot_example']}### Instructions\n\nCreate a structure for comprehensive notes on the above transcribed audio, considering the different speakers and their contributions. Use only text content, no placeholders."
+                "content": (
+                    f"{speaker_context}### Transcript\n{transcript}\n\n### Example\n\n"
+                    f"{template['shot_example']}### Instructions\n\n"
+                    "Create a structure for comprehensive notes on the above transcribed audio, "
+                    "considering the different speakers and their contributions. Use only text content, no placeholders."
+                )
             }
         ],
-        temperature=0.2,
-        max_tokens=8000,
+        temperature=0.2,       # Lower temperature for consistency
+        max_tokens=8000,       # Maximum tokens for the response
         top_p=1,
         stream=False,
         response_format={"type": "json_object"},
         stop=None,
     )
 
+    # Retrieve usage statistics from the API call.
     usage = completion.usage
     statistics_to_return = GenerationStatistics(
         input_time=usage.prompt_time,

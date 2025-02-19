@@ -199,27 +199,30 @@ def create_pdf_file(content: str):
     return pdf_buffer
 
 def transcribe_audio(audio_file, use_diarization=False):
-    """
-    Transcribes audio using Groq's Whisper API, with optional speaker diarization.
-    """
     try:
         if use_diarization:
             transcript, segments = transcribe_audio_with_speakers(audio_file)
-            prompt = f"This audio contains multiple speakers"
+            prompt = "This audio contains multiple speakers"
         else:
             prompt = ""
-            
-        # Process large audio files in chunks
-        full_transcription = process_large_audio(
-            audio_file=audio_file,
-            transcription_function=lambda chunk, _: st.session_state.groq.audio.transcriptions.create(
+        
+        # Define a transcription function that sets a valid filename for each chunk
+        def transcription_function(chunk, _):
+            # Ensure the chunk has a valid name attribute
+            if not hasattr(chunk, "name") or not chunk.name:
+                chunk.name = "audio_chunk.wav"  # Adjust the extension if needed
+            return st.session_state.groq.audio.transcriptions.create(
                 file=chunk,
                 model="whisper-large-v3",
                 prompt=prompt,
                 response_format="json",
                 language="en",
                 temperature=0.0
-            ).text,
+            ).text
+
+        full_transcription = process_large_audio(
+            audio_file=audio_file,
+            transcription_function=transcription_function,
             use_diarization=use_diarization
         )
         
