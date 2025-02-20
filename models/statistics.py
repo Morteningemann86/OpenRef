@@ -1,3 +1,7 @@
+"""
+Contains data structures and business logic for generating and displaying statistics.
+"""
+
 class GenerationStatistics:
     def __init__(self, input_time=0,output_time=0,input_tokens=0,output_tokens=0,total_time=0,model_name="llama3-8b-8192"):
         self.input_time = input_time
