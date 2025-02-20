@@ -3,7 +3,6 @@ Manages Streamlit components and layouts for the app.
 """
 
 import streamlit as st
-from ..models.statistics import GenerationStatistics
 
 class NoteSection:
     def __init__(self, structure, transcript):
