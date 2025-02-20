@@ -1,3 +1,6 @@
+""" 
+Handles external API interactions with Groq API for transcription services.
+"""
 class TranscriptionService:
     def __init__(self, groq_client):
         self.groq_client = groq_client
