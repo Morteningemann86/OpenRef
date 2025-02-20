@@ -9,7 +9,7 @@ MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB in bytes
 FILE_TOO_LARGE_MESSAGE = (
     "File size exceeds the maximum limit of 25MB. "
     "This limitation exists because the Whisper API has a maximum file size limit. "
-    "In the future, ScribeWizard will automatically split larger files."
+    "In the future, OpenRef will automatically split larger files."
 )
 
 def download_video_audio(

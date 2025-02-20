@@ -37,16 +37,16 @@ def initialize_session_state():
 def setup_sidebar() -> Tuple[str, str]:
     """Setup sidebar UI and return selected models."""
     with st.sidebar:
-        st.write("# 🧙‍♂️ ScribeWizard")
+        st.write("# 👐 OpenRef")
         st.write("## Generate notes from audio in seconds using Groq, Whisper, and Llama3")
-        st.markdown("[Github Repository](https://github.com/bklieger/scribewizard)\n\n"
+        st.markdown("[Github Repository for OpenRef](https://github.com/Morteningemann86/OpenRef)\n\n"
                    "As with all generative AI, content may include inaccurate or placeholder information. "
-                   "ScribeWizard is in beta and all feedback is welcome!")
+                   "OpenRef is an MVP build on top of [ScribeWizard.](https://github.com/Bklieger/ScribeWizard)")
         
         st.write("---")
         
         st.write("# Customization Settings\n🧪 These settings are experimental.\n")
-        st.write("By default, ScribeWizard uses Llama3-70b for generating the notes outline and "
+        st.write("By default, OpenRef uses Llama3-70b for generating the notes outline and "
                 "Llama3-8b for the content. This balances quality with speed and rate limit usage.")
         
         outline_selected_model = st.selectbox(
@@ -190,13 +190,13 @@ def generate_notes(
 
 def main():
     """Main application function."""
-    st.set_page_config(page_title="ScribeWizard", page_icon="🧙‍♂️")
+    st.set_page_config(page_title="OpenRef", page_icon="👐")
     
     # Initialize session state
     initialize_session_state()
     
     # Page title
-    st.write("# ScribeWizard: Create structured notes from audio 🗒️⚡")
+    st.write("# OpenRef: Create structured notes from audio 🗒️⚡")
     
     # Setup sidebar and get model selections
     outline_model, content_model = setup_sidebar()
