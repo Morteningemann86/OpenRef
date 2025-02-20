@@ -5,7 +5,8 @@ from pytube import YouTube
 from urllib.error import URLError
 
 # Constants
-MAX_FILE_SIZE = 25 * 1024 * 1024  # 25MB in bytes
+MAX_FILE_SIZE = 300 * 1024 * 1024  # 300MB in bytes
+
 FILE_TOO_LARGE_MESSAGE = (
     "File size exceeds the maximum limit of 25MB. "
     "This limitation exists because the Whisper API has a maximum file size limit. "
