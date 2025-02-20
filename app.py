@@ -195,26 +195,26 @@ def generate_notes(
 
 def main():
     """Main application function."""
-    # Set Streamlit page configuration
+    # Set the page configuration for Streamlit
     st.set_page_config(page_title="OpenRef", page_icon="👐")
     
     # Initialize session state variables
     initialize_session_state()
     
-    # Ensure transcription_complete flag is set
-    if 'transcription_complete' not in st.session_state:
+    # Ensure that the transcription_complete flag is initialized
+    if "transcription_complete" not in st.session_state:
         st.session_state.transcription_complete = False
 
     # Display the main page title
     st.write("# OpenRef: Create structured notes from audio 🗒️⚡")
     
-    # Setup sidebar and get model selections
+    # Setup the sidebar and get model selections for outline and content generation
     outline_model, content_model = setup_sidebar()
     
     # Handle downloads if notes have been generated
     handle_downloads()
     
-    # Choose input method (file upload or YouTube link)
+    # Choose input method: either file upload or YouTube link
     input_method = st.radio("Choose input method:", ["Upload audio file", "YouTube link"])
     
     # Create placeholders for status messages and statistics display
@@ -223,7 +223,7 @@ def main():
     
     # Create a form for processing input and generating notes
     with st.form("groqform"):
-        # If API key is missing, ask the user to provide it
+        # If the Groq API key is not set, ask for it
         if not GROQ_API_KEY:
             groq_input_key = st.text_input("Enter your Groq API Key (gsk_yA...):", "", type="password")
             if groq_input_key:
@@ -232,14 +232,13 @@ def main():
         # Process the user input and get the audio file
         audio_file = process_input(input_method, status_placeholder)
       
-        # Generate Notes button: disabled if transcription is already complete.
-        # Removed the 'key' parameter here to avoid potential incompatibility issues.
+        # Generate Notes button: disabled if transcription is complete.
         submitted = st.form_submit_button(
             st.session_state.button_text,
             disabled=st.session_state.transcription_complete
         )
         
-        # If the form is submitted and an audio file is provided, generate the notes
+        # On form submission and if an audio file is provided, generate the notes
         if submitted and audio_file:
             try:
                 generate_notes(
@@ -252,19 +251,26 @@ def main():
                 # Mark transcription as complete to disable further generation
                 st.session_state.transcription_complete = True
             except Exception as e:
-                # On error, reset transcription flag to allow retry
+                # Reset transcription flag on error to allow retry
                 st.session_state.transcription_complete = False
-                if hasattr(e, 'status_code') and e.status_code == 413:
+                if hasattr(e, "status_code") and e.status_code == 413:
                     st.error(FILE_TOO_LARGE_MESSAGE)
                 else:
                     st.error(str(e))
     
-    # Create a Clear button outside the form; it is enabled only when transcription is complete.
+    # Determine if the Clear button should be enabled.
+    # Here we check if notes have been generated. This is more robust than relying solely on the transcription_complete flag.
+    clear_enabled = "notes" in st.session_state and st.session_state.notes is not None
+
+    # Place the Clear button in a column layout; it will only be enabled when notes are available.
     col1, col2 = st.columns([1, 5])
     with col1:
-        if st.button("Clear", disabled=not st.session_state.transcription_complete, key="clear_button"):
-            # Reset the transcription flag and rerun the app to clear the generated notes
+        if st.button("Clear", disabled=not clear_enabled, key="clear_button"):
+            # Clear generated notes from session state and reset transcription flag
+            if "notes" in st.session_state:
+                del st.session_state.notes
             st.session_state.transcription_complete = False
+            # Rerun the app to update the UI
             st.rerun()
 
 
