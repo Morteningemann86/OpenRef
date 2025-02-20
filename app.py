@@ -141,7 +141,12 @@ def generate_notes(
     status_placeholder,
     stats_placeholder
 ) -> None:
-    """Generate notes from audio file."""
+    """Generate notes from an audio file."""
+    
+    # Clear previous statistics at the start
+    st.session_state.statistics_text = ""
+    stats_placeholder.empty()
+    
     transcription_service = TranscriptionService(st.session_state.groq.client)
     
     # Transcribe audio
@@ -187,6 +192,7 @@ def generate_notes(
     
     stream_section_content(notes_structure)
     status_placeholder.empty()
+
 
 def main():
     """Main application function."""
