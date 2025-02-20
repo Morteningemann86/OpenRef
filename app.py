@@ -193,50 +193,55 @@ def generate_notes(
     stream_section_content(notes_structure)
     status_placeholder.empty()
 
-
 def main():
     """Main application function."""
+    # Set Streamlit page configuration
     st.set_page_config(page_title="OpenRef", page_icon="👐")
     
-    # Initialize session state
+    # Initialize session state variables
     initialize_session_state()
     
-    # Page title
+    # Ensure transcription_complete flag is set
+    if 'transcription_complete' not in st.session_state:
+        st.session_state.transcription_complete = False
+
+    # Display the main page title
     st.write("# OpenRef: Create structured notes from audio 🗒️⚡")
     
     # Setup sidebar and get model selections
     outline_model, content_model = setup_sidebar()
     
-    # Handle downloads
+    # Handle downloads if notes have been generated
     handle_downloads()
     
-    # Input method selection
+    # Choose input method (file upload or YouTube link)
     input_method = st.radio("Choose input method:", ["Upload audio file", "YouTube link"])
     
-    # Create status placeholders
+    # Create placeholders for status messages and statistics display
     status_placeholder = st.empty()
     stats_placeholder = st.empty()
     
-    # Form for input and generation
+    # Create a form for processing input and generating notes
     with st.form("groqform"):
-        # Handle Groq API key if not set
+        # If API key is missing, ask the user to provide it
         if not GROQ_API_KEY:
             groq_input_key = st.text_input("Enter your Groq API Key (gsk_yA...):", "", type="password")
             if groq_input_key:
                 st.session_state.groq = GroqService(groq_input_key)
         
-        # Process input
+        # Process the user input and get the audio file
         audio_file = process_input(input_method, status_placeholder)
-        
-        # Generate button
+      
+        # Generate Notes button: disabled if transcription is already complete.
+        # Removed the 'key' parameter here to avoid potential incompatibility issues.
         submitted = st.form_submit_button(
             st.session_state.button_text,
-            disabled=st.session_state.button_disabled
+            disabled=st.session_state.transcription_complete
         )
         
+        # If the form is submitted and an audio file is provided, generate the notes
         if submitted and audio_file:
             try:
-                st.session_state.button_disabled = True
                 generate_notes(
                     audio_file,
                     outline_model,
@@ -244,17 +249,24 @@ def main():
                     status_placeholder,
                     stats_placeholder
                 )
+                # Mark transcription as complete to disable further generation
+                st.session_state.transcription_complete = True
             except Exception as e:
-                st.session_state.button_disabled = False
+                # On error, reset transcription flag to allow retry
+                st.session_state.transcription_complete = False
                 if hasattr(e, 'status_code') and e.status_code == 413:
                     st.error(FILE_TOO_LARGE_MESSAGE)
                 else:
                     st.error(str(e))
-                
-                if st.button("Clear"):
-                    st.rerun()
-            finally:
-                st.session_state.button_disabled = False
+    
+    # Create a Clear button outside the form; it is enabled only when transcription is complete.
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("Clear", disabled=not st.session_state.transcription_complete, key="clear_button"):
+            # Reset the transcription flag and rerun the app to clear the generated notes
+            st.session_state.transcription_complete = False
+            st.rerun()
+
 
 if __name__ == "__main__":
     main()
